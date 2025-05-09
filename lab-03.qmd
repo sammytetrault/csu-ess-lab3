@@ -79,7 +79,7 @@ pop_data <- pop_data |>
          COUNTY = as.character(COUNTY)) |>
   mutate(STATE = sprintf("%02s", STATE),
          COUNTY = sprintf("%03s", COUNTY),
-         FIPS = paste0(STATE, COUNTY)) |>
+         FIP = paste0(STATE, COUNTY)) |>
   select("FIP", contains("NAME"), contains ("2021"), "STATE", "COUNTY") |>
   filter(COUNTY != "000")
 
