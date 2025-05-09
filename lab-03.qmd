@@ -1,0 +1,182 @@
+---
+title: "Lab 3: COVID-19"
+author: "Sammy Tetrault"
+date: "2025-05-09"
+format: html
+execute: 
+  echo: true
+---
+
+#### Libraries
+
+```{r}
+library(tidyverse)
+library(flextable)
+library(zoo)
+library(dplyr)
+library(lubridate)
+```
+
+### Question 1: Public Data
+
+```{r}
+covid_data <- read.csv("https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv")
+```
+
+### Question 2: Daily Summary
+
+```{r}
+## create data object
+my.date <- as.Date("2022-02-01")
+
+## create state object
+my.state <- "Colorado"
+
+## filter data to Colorado & add new columns
+colorado_data <- covid_data |>
+  filter(state == "Colorado") |>
+  arrange(county, date) |>
+  group_by(county) |>
+  mutate(
+    new_cases = replace_na(cases - lag(cases), 0),
+    new_deaths = replace_na(cases - lag(cases), 0),
+    cumulative_cases = cumsum(new_cases)) |>
+  ungroup()
+
+top_cumulative <- colorado_data |>
+  filter(date == my.date)|>
+  arrange(desc(cumulative_cases)) |>
+  slice_max(cumulative_cases, n = 5) |>
+  select("date", "county", "cumulative_cases")
+
+top_new <- colorado_data |>
+  filter(date == my.date) |>
+  arrange(desc(new_cases)) |>
+  slice_max(new_cases, n =5) |>
+  select("date", "county", "new_cases")
+
+cumulative_flx <- flextable(top_cumulative) |>
+  flextable::set_caption("Top 5 Colorado Counties Cumulative Covid Cases As of Date")
+
+new_flx <- flextable(top_new) |>
+  flextable::set_caption("Top 5 Colorado Counties New Covid Cases As of Date")
+
+print(cumulative_flx)
+
+print(new_flx)
+```
+
+### Question 3: Normalizing Data
+
+```{r}
+pop_data <- read_csv("https://www2.census.gov/programs-surveys/popest/datasets/2020-2023/counties/totals/co-est2023-alldata.csv")
+
+## I checked the structure of the data, STATE and COUNTY are already chrs, no need to convert
+# str(pop_data)
+
+pop_data <- pop_data |>
+  mutate(STATE = as.character(STATE),
+         COUNTY = as.character(COUNTY)) |>
+  mutate(STATE = sprintf("%02s", STATE),
+         COUNTY = sprintf("%03s", COUNTY),
+         FIPS = paste0(STATE, COUNTY)) |>
+  select("FIP", contains("NAME"), contains ("2021"), "STATE", "COUNTY") |>
+  filter(COUNTY != "000")
+
+str(pop_data)
+```
+
+After modification, we have a data from of population information from the year 2021 across counties in the United States. This includes population estimates, births, deaths, etc. Both the covid data and population data that we modified have a FIP, county, and state column (although, under different names).
+
+```{r}
+colorado_pop_data <- pop_data |>
+  filter(STNAME == "Colorado")
+
+highest_CO_pop <- colorado_pop_data |>
+  arrange(desc(POPESTIMATE2021)) |>
+  slice_max(POPESTIMATE2021, n = 1)
+
+lowest_CO_pop <- colorado_pop_data |>
+  arrange(POPESTIMATE2021) |>
+  slice_min(POPESTIMATE2021, n = 1)
+
+range = highest_CO_pop$POPESTIMATE2021 - lowest_CO_pop$POPESTIMATE2021
+```
+
+The range of populations seen in Colorado counties in 2021 is 736,546.
+
+```{r}
+str(colorado_data)
+
+## had to mutate the colorado_data so that the FIP column matched both and could use as join key
+colorado_data <- colorado_data |>
+  mutate(FIP = sprintf("%05d", fips)) |>
+  mutate(FIP = as.character(FIP))
+
+joined_data <- full_join(colorado_data, colorado_pop_data, by = "FIP")
+
+joined_data <- joined_data |>
+  group_by(county) |>
+  mutate(
+    cumulative_per_cap = (cumulative_cases/POPESTIMATE2021),
+    new_cases_per_cap = (new_cases/POPESTIMATE2021),
+    new_deaths_per_cap = (new_deaths/POPESTIMATE2021)) |>
+  ungroup()
+
+per_cap_data <- joined_data |>
+  filter(date == "2021-01-01")
+
+most_cumulative_per_cap <- per_cap_data |>
+  arrange(desc(cumulative_per_cap)) |>
+  slice_max(cumulative_per_cap, n = 5) |>
+  select("date", "county", "cumulative_per_cap")
+
+most_new_per_cap <- per_cap_data |>
+  arrange(desc(new_cases_per_cap)) |>
+  slice_max(new_cases_per_cap, n = 5) |>
+  select("date", "county", "new_cases_per_cap")
+
+most_cumu_cap_flx <- flextable(most_cumulative_per_cap) |>
+  flextable::set_caption("Top Colorado Counties Cumulative Covid Cases Per Capita As of Date")
+
+most_new_cap_flx <- flextable(most_new_per_cap) |>
+  flextable::set_caption("Top Colorado Counties New Covid Cases Per Capita As of Date")
+
+print(most_cumu_cap_flx)
+
+print(most_new_cap_flx)
+```
+
+### Question 5: Death toll
+
+```{r}
+
+covid_death_data <- joined_data |>
+  filter(date >= "2021-01-01" & date <= "2021-12-31") |>
+  group_by(county) |>
+  mutate(cumulative_deaths = cumsum(new_deaths)) |>
+  ungroup()
+
+beginning_deaths <- covid_death_data |>
+  group_by(county) |>
+  filter(date == "2021-01-01") |>
+  select(cumulative_deaths, county) |>
+  mutate(beginning_cumulative_deaths = cumulative_deaths) |>
+  ungroup()
+
+ending_deaths <- covid_death_data |>
+  filter(date == "2021-12-31") |>
+  group_by(county) |>
+  select(cumulative_deaths, county) |>
+  mutate(end_cumulative_deaths = cumulative_deaths) |>
+  ungroup()
+
+covid_death_data <- full_join(covid_death_data, beginning_deaths, by = "county")
+
+covid_death_data <- full_join(covid_death_data, ending_deaths, by = "county")
+
+covid_death_data <- covid_death_data |>
+  group_by(county)|>
+  mutate(deaths_from_covid = end_cumulative_deaths - beginning_cumulative_deaths,
+         ratio = deaths_from_covid/DEATHS2021)
+```
